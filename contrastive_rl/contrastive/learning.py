@@ -102,19 +102,25 @@ class ContrastiveLearner(acme.Learner):
       alpha_loss = alpha * jax.lax.stop_gradient(
           -log_prob - config.target_entropy)
       return jnp.mean(alpha_loss)
-
-    def critic_loss(q_params,
-                    policy_params,
-                    target_q_params,
-                    transitions,
+    
+    def critic_loss(q_params,  # Q函数参数
+                    policy_params, # 策略网络的参数
+                    target_q_params, # 目标Q函数的参数
+                    transitions, # 包含状态，动作，奖励，下一状态等信息的转移数据
                     key):
+
+      
       batch_size = transitions.observation.shape[0]
       # Note: We might be able to speed up the computation for some of the
       # baselines to making a single network that returns all the values. This
       # avoids computing some of the underlying representations multiple times.
+
+      # 提取Positive Pair，正样本可以是当前状态-动作对及真实的未来状态
       if config.use_td:
         # For TD learning, the diagonal elements are the immediate next state.
         s, g = jnp.split(transitions.observation, [config.obs_dim], axis=1)
+
+        # 提取下一状态
         next_s, _ = jnp.split(transitions.next_observation, [config.obs_dim],
                               axis=1)
         if config.add_mc_to_td:
