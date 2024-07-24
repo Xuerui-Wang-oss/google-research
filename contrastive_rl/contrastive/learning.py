@@ -112,14 +112,24 @@ class ContrastiveLearner(acme.Learner):
       # Note: We might be able to speed up the computation for some of the
       # baselines to making a single network that returns all the values. This
       # avoids computing some of the underlying representations multiple times.
+
+      # 寻找Positive Pair
       if config.use_td:
         # For TD learning, the diagonal elements are the immediate next state.
+
+        # 分割出当前的状态和目标
         s, g = jnp.split(transitions.observation, [config.obs_dim], axis=1)
+
+        # 分割出下一状态
         next_s, _ = jnp.split(transitions.next_observation, [config.obs_dim],
                               axis=1)
+
+      
         if config.add_mc_to_td:
           next_fraction = (1 - config.discount) / ((1 - config.discount) + 1)
           num_next = int(batch_size * next_fraction)
+
+          # 将'来自下一状态的目标'和'保留的当前目标'拼接成新的目标'new_g'
           new_g = jnp.concatenate([
               obs_to_goal(next_s[:num_next]),
               g[num_next:],
@@ -127,8 +137,13 @@ class ContrastiveLearner(acme.Learner):
         else:
           new_g = obs_to_goal(next_s)
         obs = jnp.concatenate([s, new_g], axis=1)
+        # 更新transitions
         transitions = transitions._replace(observation=obs)
+
+      # 创建单位矩阵和计算logits
       I = jnp.eye(batch_size)  # pylint: disable=invalid-name
+
+      # 表示给定状态和动作对的Q值 (Positive Pair)
       logits = networks.q_network.apply(
           q_params, transitions.observation, transitions.action)
 
@@ -136,11 +151,14 @@ class ContrastiveLearner(acme.Learner):
         # Make sure to use the twin Q trick.
         assert len(logits.shape) == 3
 
-        # We evaluate the next-state Q function using random goals
+        # 计算下一状态Q值，生成随机目标
         s, g = jnp.split(transitions.observation, [config.obs_dim], axis=1)
         del s
         next_s = transitions.next_observation[:, :config.obs_dim]
+        
         goal_indices = jnp.roll(jnp.arange(batch_size, dtype=jnp.int32), -1)
+        
+        # 得到Positive Pair
         g = g[goal_indices]
         transitions = transitions._replace(
             next_observation=jnp.concatenate([next_s, g], axis=1))
@@ -150,6 +168,7 @@ class ContrastiveLearner(acme.Learner):
         next_q = networks.q_network.apply(target_q_params,
                                           transitions.next_observation,
                                           next_action)  # This outputs logits.
+        # 计算下一状态Q值 (Negative Pair)
         next_q = jax.nn.sigmoid(next_q)
         next_v = jnp.min(next_q, axis=-1)
         next_v = jax.lax.stop_gradient(next_v)
@@ -159,14 +178,20 @@ class ContrastiveLearner(acme.Learner):
         # the predictions logits[range(B), goal_indices].
         # So, the only thing that's meaningful for next_q is the diagonal. Off
         # diagonal entries are meaningless and shouldn't be used.
+
+        
         w = next_v / (1 - next_v)
         w_clipping = 20.0
         w = jnp.clip(w, 0, w_clipping)
         # (B, B, 2) --> (B, 2), computes diagonal of each twin Q.
+
+        # 计算出正样本对的损失
+        # 这里符合Algorithm 1代码内容
         pos_logits = jax.vmap(jnp.diag, -1, -1)(logits)
         loss_pos = optax.sigmoid_binary_cross_entropy(
             logits=pos_logits, labels=1)  # [B, 2]
 
+        # 计算出负样本对的损失
         neg_logits = logits[jnp.arange(batch_size), goal_indices]
         loss_neg1 = w[:, None] * optax.sigmoid_binary_cross_entropy(
             logits=neg_logits, labels=1)  # [B, 2]
